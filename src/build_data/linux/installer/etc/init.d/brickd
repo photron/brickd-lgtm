@@ -1,0 +1,147 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          brickd
+# Required-Start:    $remote_fs $syslog $network
+# Required-Stop:     $remote_fs $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: brickd
+# Description:       Brick Daemon
+### END INIT INFO
+
+# brickd (Brick Daemon)
+# Copyright (C) 2011-2012 Olaf Lüke <olaf@tinkerforge.com>
+# Copyright (C) 2013-2015, 2017 Matthias Bolte <matthias@tinkerforge.com>
+#
+# based on skeleton from Debian GNU/Linux
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public
+# License along with this program; if not, write to the
+# Free Software Foundation, Inc., 59 Temple Place - Suite 330,
+# Boston, MA 02111-1307, USA.
+
+PATH=/bin:/usr/bin:/sbin:/usr/sbin
+DAEMON=/usr/bin/brickd
+OPTIONS=--daemon
+PIDFILE=/var/run/brickd.pid
+
+test -x $DAEMON || exit 0
+
+. /lib/lsb/init-functions
+
+if type log_daemon_msg >/dev/null 2>&1 || false; then
+    true
+else
+    log_daemon_msg () {
+        if [ -z "${1:-}" ]; then
+            return 1
+        fi
+
+        if [ -z "${2:-}" ]; then
+            echo -n "$1:" || true
+            return
+        fi
+
+        echo -n "$1: $2" || true
+    }
+fi
+
+if type log_end_msg >/dev/null 2>&1 || false; then
+    true
+else
+    log_end_msg () {
+        if [ -z "${1:-}" ]; then
+            return 1
+        fi
+
+        local retval
+        retval=$1
+
+        if [ $1 -eq 0 ]; then
+            echo "." || true
+        elif [ $1 -eq 255 ]; then
+            /bin/echo -e " (warning)." || true
+        else
+            /bin/echo -e " failed!" || true
+        fi
+
+        return $retval
+    }
+fi
+
+if type status_of_proc >/dev/null 2>&1 || false; then
+    true
+else
+    status_of_proc () {
+        local pidfile daemon name status OPTIND
+
+        pidfile=
+        OPTIND=1
+
+        while getopts p: opt ; do
+            case "$opt" in
+                p)  pidfile="$OPTARG";;
+            esac
+        done
+
+        shift $(($OPTIND - 1))
+
+        if [ -n "$pidfile" ]; then
+            pidfile="-p $pidfile"
+        fi
+
+        daemon="$1"
+        name="$2"
+        status="0"
+
+        pidofproc $pidfile $daemon >/dev/null || status="$?"
+
+        if [ "$status" = 0 ]; then
+            log_success_msg "$name is running"
+            return 0
+        elif [ "$status" = 4 ]; then
+            log_failure_msg "could not access PID file for $name"
+            return $status
+        else
+            log_failure_msg "$name is not running"
+            return $status
+        fi
+    }
+fi
+
+case "$1" in
+  start)
+    log_daemon_msg "Starting Brick Daemon" "brickd"
+    start_daemon -p $PIDFILE $DAEMON $OPTIONS
+    log_end_msg $?
+    ;;
+  stop)
+    log_daemon_msg "Stopping Brick Daemon" "brickd"
+    killproc -p $PIDFILE $DAEMON
+    log_end_msg $?
+    ;;
+  restart|force-reload)
+    $0 stop
+    sleep 1
+    $0 start
+    ;;
+  status)
+    status_of_proc -p $PIDFILE $DAEMON "brickd" && exit 0 || exit $?
+    ;;
+  *)
+    echo "Usage: /etc/init.d/brickd {start|stop|restart|force-reload|status}" >&2
+    exit 1
+    ;;
+esac
+
+exit 0

@@ -1,0 +1,168 @@
+diff --git a/libusb/Makefile.am b/libusb/Makefile.am
+index e4da62e..7929168 100644
+--- a/libusb/Makefile.am
++++ b/libusb/Makefile.am
+@@ -44,6 +44,7 @@ endif
+ if OS_DARWIN
+ OS_SRC = $(DARWIN_USB_SRC)
+ AM_CFLAGS_EXT = -no-cpp-precomp
++AM_CFLAGS += -mmacosx-version-min=10.9
+ endif
+ 
+ if OS_OPENBSD
+diff --git a/libusb/core.c b/libusb/core.c
+index 741bf99..953c6ee 100644
+--- a/libusb/core.c
++++ b/libusb/core.c
+@@ -2553,21 +2553,32 @@ static void usbi_log_str(enum libusb_log_level level, const char *str)
+ 	UNUSED(level);
+ }
+ 
++static libusb_log_callback usbi_log_callback = NULL;
++
++void API_EXPORTED libusb_set_log_callback(libusb_log_callback callback) {
++	usbi_log_callback = callback;
++}
++
+ void usbi_log_v(struct libusb_context *ctx, enum libusb_log_level level,
+ 	const char *function, const char *format, va_list args)
+ {
++	enum libusb_log_level ctx_level = LIBUSB_LOG_LEVEL_NONE;
+ 	const char *prefix;
+ 	char buf[USBI_MAX_LOG_LEN];
+ 	struct timespec now;
+ 	int global_debug, header_len, text_len;
+ 	static int has_debug_header_been_displayed = 0;
+ 
++	if (usbi_log_callback != NULL) {
++		usbi_log_callback(ctx, level, function, format, args);
++		return;
++	}
++
+ #ifdef ENABLE_DEBUG_LOGGING
+ 	global_debug = 1;
+ 	UNUSED(ctx);
++	UNUSED(ctx_level);
+ #else
+-	enum libusb_log_level ctx_level = LIBUSB_LOG_LEVEL_NONE;
+-
+ 	USBI_GET_CONTEXT(ctx);
+ 	if (ctx)
+ 		ctx_level = ctx->debug;
+diff --git a/libusb/libusb.h b/libusb/libusb.h
+index 8a6b0bf..a94160a 100644
+--- a/libusb/libusb.h
++++ b/libusb/libusb.h
+@@ -60,6 +60,7 @@ typedef unsigned __int32  uint32_t;
+ 
+ #include <time.h>
+ #include <limits.h>
++#include <stdarg.h>
+ 
+ #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L)
+ #define ZERO_SIZED_ARRAY		/* [] - valid C99 code */
+@@ -1321,7 +1322,6 @@ typedef void (LIBUSB_CALL *libusb_log_cb)(libusb_context *ctx,
+ 
+ int LIBUSB_CALL libusb_init(libusb_context **ctx);
+ void LIBUSB_CALL libusb_exit(libusb_context *ctx);
+-LIBUSB_DEPRECATED_FOR(libusb_set_option)
+ void LIBUSB_CALL libusb_set_debug(libusb_context *ctx, int level);
+ void LIBUSB_CALL libusb_set_log_cb(libusb_context *ctx, libusb_log_cb cb, int mode);
+ const struct libusb_version * LIBUSB_CALL libusb_get_version(void);
+@@ -2059,6 +2059,13 @@ enum libusb_option {
+ 
+ int LIBUSB_CALL libusb_set_option(libusb_context *ctx, enum libusb_option option, ...);
+ 
++typedef void (LIBUSB_CALL *libusb_log_callback)(libusb_context *ctx,
++                                                enum libusb_log_level level,
++                                                const char *function,
++                                                const char *format,
++                                                va_list args);
++void LIBUSB_CALL libusb_set_log_callback(libusb_log_callback callback);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/libusb/os/darwin_usb.c b/libusb/os/darwin_usb.c
+index f6e853b..d914536 100644
+--- a/libusb/os/darwin_usb.c
++++ b/libusb/os/darwin_usb.c
+@@ -766,7 +766,13 @@ static enum libusb_error darwin_cache_device_descriptor (struct libusb_context *
+   /* According to Apple's documentation the device must be open for DeviceRequest but we may not be able to open some
+    * devices and Apple's USB Prober doesn't bother to open the device before issuing a descriptor request.  Still,
+    * to follow the spec as closely as possible, try opening the device */
+-  is_open = ((*device)->USBDeviceOpenSeize(device) == kIOReturnSuccess);
++  if (kIOUSBVendorIDAppleComputer != idVendor) {
++    is_open = ((*device)->USBDeviceOpenSeize(device) == kIOReturnSuccess);
++  } else {
++    // don't open Apple devices, brickd is not interested in them, and opening an Apple USB-Ethernet-Adapter
++    // breaks the Ethernet connection of this adapter
++    is_open = 0;
++  }
+ 
+   do {
+     /**** retrieve device descriptor ****/
+@@ -1196,7 +1202,10 @@ static void darwin_close (struct libusb_device_handle *dev_handle) {
+       if (kresult != kIOReturnSuccess) {
+         /* Log the fact that we had a problem closing the file, however failing a
+          * close isn't really an error, so return success anyway */
+-        usbi_warn (HANDLE_CTX (dev_handle), "USBDeviceClose: %s", darwin_error_str(kresult));
++        if (kresult != kIOReturnNoDevice)
++          usbi_warn (HANDLE_CTX (dev_handle), "USBDeviceClose: %s", darwin_error_str(kresult));
++        else
++          usbi_dbg ("USBDeviceClose: %s", darwin_error_str(kresult));
+       }
+     }
+   }
+@@ -1354,7 +1363,7 @@ static int darwin_claim_interface(struct libusb_device_handle *dev_handle, int i
+ 
+   /* make sure we have an interface */
+   if (!usbInterface && dpriv->first_config != 0) {
+-    usbi_info (HANDLE_CTX (dev_handle), "no interface found; setting configuration: %d", dpriv->first_config);
++    usbi_dbg ("no interface found; setting configuration: %d", dpriv->first_config);
+ 
+     /* set the configuration */
+     ret = darwin_set_configuration (dev_handle, dpriv->first_config);
+@@ -1371,7 +1380,7 @@ static int darwin_claim_interface(struct libusb_device_handle *dev_handle, int i
+   }
+ 
+   if (!usbInterface) {
+-    usbi_err (HANDLE_CTX (dev_handle), "interface not found");
++    //usbi_err (HANDLE_CTX (dev_handle), "interface not found");
+     return LIBUSB_ERROR_NOT_FOUND;
+   }
+ 
+@@ -1462,8 +1471,12 @@ static int darwin_release_interface(struct libusb_device_handle *dev_handle, int
+   }
+ 
+   kresult = (*(cInterface->interface))->USBInterfaceClose(cInterface->interface);
+-  if (kresult != kIOReturnSuccess)
+-    usbi_warn (HANDLE_CTX (dev_handle), "USBInterfaceClose: %s", darwin_error_str(kresult));
++  if (kresult != kIOReturnSuccess) {
++    if (kresult != kIOReturnNoDevice)
++      usbi_warn (HANDLE_CTX (dev_handle), "USBInterfaceClose: %s", darwin_error_str(kresult));
++    else
++      usbi_dbg ("USBInterfaceClose: %s", darwin_error_str(kresult));
++  }
+ 
+   kresult = (*(cInterface->interface))->Release(cInterface->interface);
+   if (kresult != kIOReturnSuccess)
+@@ -1982,7 +1995,7 @@ static int darwin_abort_transfers (struct usbi_transfer *itransfer) {
+   if (!dpriv->device)
+     return LIBUSB_ERROR_NO_DEVICE;
+ 
+-  usbi_warn (ITRANSFER_CTX (itransfer), "aborting all transactions on interface %d pipe %d", iface, pipeRef);
++  usbi_dbg ("aborting all transactions on interface %d pipe %d", iface, pipeRef);
+ 
+   /* abort transactions */
+ #if InterfaceVersion >= 550
+@@ -2070,6 +2083,9 @@ static enum libusb_transfer_status darwin_transfer_status (struct usbi_transfer
+     usbi_warn (ITRANSFER_CTX (itransfer), "transfer error: timed out");
+     itransfer->timeout_flags |= USBI_TRANSFER_TIMED_OUT;
+     return LIBUSB_TRANSFER_TIMED_OUT;
++  case kIOReturnNotResponding:
++    usbi_dbg ("transfer error: not responding, faking stall");
++    return LIBUSB_TRANSFER_STALL;
+   default:
+     usbi_warn (ITRANSFER_CTX (itransfer), "transfer error: %s (value = 0x%08x)", darwin_error_str (result), result);
+     return LIBUSB_TRANSFER_ERROR;

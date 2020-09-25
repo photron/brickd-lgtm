@@ -1,0 +1,34 @@
+# Maintainer: Matthias Bolte <matthias@tinkerforge.com>
+pkgname="brickd"
+pkgver="2.4.1_git20200514192222"
+_brickdgitref="45f32697b2db20900df08a8c1fd906e39deb7bb3"
+_daemonlibgitref="ae08564aaca67682de7efeab6708891d206efd63"
+pkgrel=0
+pkgdesc="Tinkerforge Brick Daemon"
+options="!check"
+url="https://www.tinkerforge.com/"
+arch="all"
+license="GPL-2.0-or-later"
+depends="libusb"
+makedepends="libusb-dev linux-headers"
+subpackages="$pkgname-openrc"
+source="brickd-$_brickdgitref.zip::https://github.com/Tinkerforge/brickd/archive/$_brickdgitref.zip
+	daemonlib-$_daemonlibgitref.zip::https://github.com/Tinkerforge/daemonlib/archive/$_daemonlibgitref.zip
+	$pkgname.initd
+	"
+
+build() {
+	cd "$srcdir"
+	mv daemonlib-$_daemonlibgitref brickd-$_brickdgitref/src/daemonlib
+	cd brickd-$_brickdgitref/src/brickd
+	make WITH_LIBUSB_HOTPLUG_MKNOD=yes
+}
+
+package() {
+	install -m755 -D "$srcdir"/brickd-$_brickdgitref/src/brickd/brickd "$pkgdir"/usr/sbin/brickd
+	install -m755 -D "$srcdir"/$pkgname.initd "$pkgdir"/etc/init.d/$pkgname
+}
+
+sha512sums="8b9b80d851b7f087263de012b3830a448e8256d0eeafa7e0fb4b456f17d2b155670f11180b21610677ffb1e8602787a019d9b497d250a7487224ef78b51c0c57  brickd-45f32697b2db20900df08a8c1fd906e39deb7bb3.zip
+7dfd0440239cf1cf4f5878068de6f06bf5415b99402b0113e13e7d1dad28d3142caf6a300a697f422ac5bc801a67432ea37a3d3a25a1b674321317b6dda7fd87  daemonlib-ae08564aaca67682de7efeab6708891d206efd63.zip
+d6295fbf434b17f3f01cbe838bc6ceca7917144414ba67cc4102c6cfc9fea3a7b96c8cf2d18dba14f492edbfad55486301a8af56de7ec79c90b21fbaca3f9e75  brickd.initd"
